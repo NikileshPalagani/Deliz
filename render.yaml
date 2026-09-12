@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: campus-bite
+    runtime: node
+    # Plan note: 'free' works for initial deployment/prototyping.
+    # Recommended for 8,000+ student production traffic: 'starter' (512MB RAM, 0.5 CPU) or 'standard' (2GB RAM, 1 CPU) with auto-scaling.
+    plan: free
+    region: singapore # Low latency region for Indian college campus traffic
+    buildCommand: npm install && npm run build
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_EMAIL
+        sync: false
+      - key: BREVO_SENDER_NAME
+        sync: false

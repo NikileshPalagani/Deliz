@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="100%" height="100%">
+  <defs>
+    <linearGradient id="eggPuffGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="45%" stop-color="#d97706"/>
+      <stop offset="100%" stop-color="#78350f"/>
+    </linearGradient>
+    <filter id="shadowEggPuff" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <rect width="100%" height="100%" fill="#111827" rx="16"/>
+  <!-- Plate -->
+  <ellipse cx="200" cy="225" rx="150" ry="38" fill="#1f2937" opacity="0.8" />
+  <!-- Puff Shape with Egg Half -->
+  <g filter="url(#shadowEggPuff)">
+    <rect x="85" y="90" width="230" height="125" rx="20" fill="url(#eggPuffGrad)" stroke="#78350f" stroke-width="3"/>
+    <!-- Cutout showcasing boiled egg half with spicy masala -->
+    <ellipse cx="200" cy="150" rx="45" ry="32" fill="#ffffff" stroke="#d97706" stroke-width="2"/>
+    <ellipse cx="200" cy="152" rx="26" ry="19" fill="#f59e0b" stroke="#b45309" stroke-width="2"/>
+    <!-- Red pepper flakes / spicy masala -->
+    <circle cx="190" cy="145" r="2.5" fill="#dc2626"/>
+    <circle cx="210" cy="155" r="2" fill="#dc2626"/>
+    <circle cx="200" cy="160" r="2.5" fill="#991b1b"/>
+    <circle cx="180" cy="150" r="1.5" fill="#991b1b"/>
+    <!-- Flaky Crinkles -->
+    <path d="M 100,115 Q 150,105 170,115" stroke="#78350f" stroke-width="2.5" fill="none"/>
+    <path d="M 230,115 Q 260,105 300,115" stroke="#78350f" stroke-width="2.5" fill="none"/>
+    <path d="M 95,180 Q 150,195 170,185" stroke="#78350f" stroke-width="2.5" fill="none"/>
+    <path d="M 230,185 Q 260,195 305,180" stroke="#78350f" stroke-width="2.5" fill="none"/>
+  </g>
+</svg>
