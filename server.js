@@ -618,28 +618,35 @@ if (razorpayKeyId && razorpayKeySecret) {
   console.warn(`⚠️ [RAZORPAY NOT CONFIGURED] Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in environment variables.`);
 }
 
-// Configure Transactional Email Dispatcher (Brevo HTTPS REST API / SMTP Fallback)
-const brevoApiKey = (process.env.BREVO_API_KEY || '').trim();
-const senderEmail = (process.env.BREVO_SENDER_EMAIL || process.env.SENDER_EMAIL || 'projectfromnewgen@gmail.com').trim();
-const senderName = (process.env.BREVO_SENDER_NAME || process.env.SENDER_NAME || 'Deliz').trim();
+// Configure Transactional Email Dispatcher (Brevo HTTPS REST API)
+const getBrevoApiKey = () => (process.env.BREVO_API_KEY || '').trim();
+const getBrevoSenderEmail = () => (process.env.BREVO_SENDER_EMAIL || process.env.SENDER_EMAIL || '').trim();
+const getBrevoSenderName = () => (process.env.BREVO_SENDER_NAME || process.env.SENDER_NAME || 'Deliz').trim();
 
-if (brevoApiKey) {
-  console.log(`📧 [BREVO HTTPS API CONFIGURED] Sender: "${senderName}" <${senderEmail}>`);
+if (getBrevoApiKey()) {
+  console.log(`📧 [BREVO HTTPS API CONFIGURED] Sender: "${getBrevoSenderName()}" <${getBrevoSenderEmail() || 'Not Set'}>`);
 } else {
-  console.warn('⚠️ [BREVO API KEY NOT CONFIGURED] Using SMTP/Mock fallback for emails.');
+  console.warn('⚠️ [BREVO API KEY NOT CONFIGURED] Set BREVO_API_KEY and BREVO_SENDER_EMAIL in environment variables.');
 }
 
 /**
  * Dispatches transactional email using Brevo REST API over standard HTTPS (Port 443)
  */
 const sendBrevoTransactionalEmail = async ({ to, subject, htmlContent, textContent }) => {
-  const apiKey = (process.env.BREVO_API_KEY || '').trim();
+  const apiKey = getBrevoApiKey();
   if (!apiKey) {
     throw new Error('BREVO_API_KEY is not configured in environment variables');
   }
 
+  const senderEmail = getBrevoSenderEmail();
+  if (!senderEmail) {
+    throw new Error('BREVO_SENDER_EMAIL is not configured in environment variables. A verified Brevo sender email is required.');
+  }
+
+  const senderName = getBrevoSenderName();
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 9000); // 9s timeout
+  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
 
   try {
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -676,101 +683,62 @@ const sendBrevoTransactionalEmail = async ({ to, subject, htmlContent, textConte
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      throw new Error('Brevo HTTPS request timed out after 9 seconds');
+      throw new Error('Brevo HTTPS request timed out after 8 seconds');
     }
     throw err;
   }
 };
 
+const isTestEnvironment = () => {
+  if (process.env.NODE_ENV === 'test' || process.env.TEST_MODE === 'true') return true;
+  if (process.argv[1] && (process.argv[1].includes('test') || process.argv[1].includes('verify') || process.argv[1].includes('load-test'))) return true;
+  return false;
+};
+
 /**
- * Unified email dispatcher with multi-tier failover
+ * Unified email dispatcher using Brevo (with optional SMTP environment variable fallback)
  */
-const sendVerificationEmail = async ({ to, subject, htmlContent, textContent }) => {
-  let lastError = null;
-
-  // 1. If Brevo HTTPS API configured, try Brevo first
-  if (brevoApiKey) {
-    try {
-      const result = await sendBrevoTransactionalEmail({ to, subject, htmlContent, textContent });
-      console.log(`[EMAIL] ✅ Brevo transactional email dispatched to ${to}`);
-      return result;
-    } catch (brevoErr) {
-      console.warn(`[EMAIL] ⚠️ Brevo dispatch notice: ${brevoErr.message}, falling back to Gmail SMTP...`);
-      lastError = brevoErr;
-    }
+const sendVerificationEmail = async ({ to, subject, htmlContent, textContent, forceReal = false }) => {
+  // Safe mock mode for automated test suites to prevent Brevo quota drain
+  if (!forceReal && isTestEnvironment()) {
+    return { success: true, testMock: true };
   }
 
-  // 2. Gmail SMTP with port 587 STARTTLS (tested & proven reliable)
-  const smtpUser = (process.env.EMAIL_USER || process.env.SMTP_USER || 'projectfromnewgen@gmail.com').trim();
-  const smtpPass = (process.env.EMAIL_APP_PASS || process.env.SMTP_PASS || 'bpdf iayk gfsu kyzm').replace(/\s+/g, '');
+  const apiKey = getBrevoApiKey();
+
+  // 1. Primary: Brevo HTTPS REST API
+  if (apiKey) {
+    return await sendBrevoTransactionalEmail({ to, subject, htmlContent, textContent });
+  }
+
+  // 2. Secondary: If explicit SMTP environment variables are configured
+  const smtpUser = (process.env.SMTP_USER || process.env.EMAIL_USER || '').trim();
+  const smtpPass = (process.env.SMTP_PASS || process.env.EMAIL_APP_PASS || '').trim();
   if (smtpUser && smtpPass) {
-    try {
-      const nodemailer = await import('nodemailer');
-      const transporter = nodemailer.default.createTransport({
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false, // STARTTLS
-        auth: {
-          user: smtpUser.trim(),
-          pass: smtpPass.trim(),
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-      });
+    const senderName = getBrevoSenderName();
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.default.createTransport({
+      host: (process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: false, // STARTTLS
+      auth: { user: smtpUser, pass: smtpPass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 10000,
+    });
 
-      const info = await transporter.sendMail({
-        from: `"${senderName}" <${smtpUser.trim()}>`,
-        to,
-        subject,
-        text: textContent,
-        html: htmlContent,
-      });
-      console.log(`[EMAIL] ✅ Gmail SMTP (port 587) dispatched successfully to ${to} (MessageId: ${info.messageId})`);
-      return info;
-    } catch (smtpErr) {
-      console.warn('[EMAIL] ⚠️ Gmail SMTP (port 587) notice:', smtpErr.message);
-      lastError = smtpErr;
-
-      // 2b. Fallback to port 465 SSL
-      try {
-        const nodemailer = await import('nodemailer');
-        const transporter465 = nodemailer.default.createTransport({
-          host: 'smtp.gmail.com',
-          port: 465,
-          secure: true,
-          auth: {
-            user: smtpUser.trim(),
-            pass: smtpPass.trim(),
-          },
-          tls: {
-            rejectUnauthorized: false,
-          },
-          connectionTimeout: 8000,
-          greetingTimeout: 8000,
-          socketTimeout: 10000,
-        });
-        const info465 = await transporter465.sendMail({
-          from: `"${senderName}" <${smtpUser.trim()}>`,
-          to,
-          subject,
-          text: textContent,
-          html: htmlContent,
-        });
-        console.log(`[EMAIL] ✅ Gmail SMTP (port 465) dispatched to ${to}`);
-        return info465;
-      } catch (err465) {
-        console.warn('[EMAIL] ⚠️ Gmail SMTP (port 465) notice:', err465.message);
-      }
-    }
+    return await transporter.sendMail({
+      from: `"${senderName}" <${smtpUser}>`,
+      to,
+      subject,
+      text: textContent,
+      html: htmlContent,
+    });
   }
 
-  // 3. Fallback: Log email details for audit & local demo access
-  console.log(`[EMAIL] 📧 Delivery logged for ${to}: ${subject}`);
-  return { success: true, simulated: true, notice: lastError?.message };
+  // 3. Neither Brevo nor SMTP configured -> Fail explicitly with clear error
+  throw new Error('No transactional email provider configured. Please set BREVO_API_KEY and BREVO_SENDER_EMAIL in environment variables.');
 };
 
 // ----------------------------------------------------
@@ -869,9 +837,9 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     database: isSupabaseAdminConfigured() ? 'Supabase PostgreSQL (Active)' : 'In-Memory Fallback',
     authBackend: isSupabaseAdminConfigured() ? 'Supabase Auth' : 'Local Fallback',
-    emailService: brevoApiKey ? 'Brevo HTTPS REST API' : 'SMTP/Mock Fallback',
-    emailConfigured: !!brevoApiKey || !!(process.env.EMAIL_USER && process.env.EMAIL_APP_PASS),
-    senderEmail: senderEmail || null,
+    emailService: getBrevoApiKey() ? 'Brevo HTTPS REST API' : ((process.env.SMTP_USER || process.env.EMAIL_USER) ? 'SMTP Fallback' : 'Not Configured'),
+    emailConfigured: !!getBrevoApiKey() || !!((process.env.SMTP_USER || process.env.EMAIL_USER) && (process.env.SMTP_PASS || process.env.EMAIL_APP_PASS)),
+    senderEmail: getBrevoSenderEmail() || null,
     razorpayConfigured: !!razorpay,
     uptime: process.uptime(),
   });
@@ -936,31 +904,44 @@ const normalizeOtpPurpose = (purpose = '') => {
 // ----------------------------------------------------
 app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), async (req, res) => {
   try {
-    const { email, purpose = 'registration' } = req.body;
+    const { email, rollNo, purpose = 'registration' } = req.body;
 
-    let cleanEmail = (email || '').toString().trim().toLowerCase();
-
-    if (!cleanEmail) {
-      return res.status(400).json({ success: false, message: 'Email or Roll Number is required.' });
+    const rawInput = (rollNo || email || '').toString().trim();
+    if (!rawInput) {
+      return res.status(400).json({ success: false, message: 'Roll number or college email is required.' });
     }
 
-    // Auto-append @cvr.ac.in if user provided just their roll number
-    if (!cleanEmail.includes('@')) {
-      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    let extractedRoll = '';
+    if (rawInput.includes('@')) {
+      const parts = rawInput.split('@');
+      if (parts.length !== 2 || parts[1].toLowerCase() !== 'cvr.ac.in') {
+        return res.status(400).json({
+          success: false,
+          message: 'College email must end with @cvr.ac.in (e.g. 22B81A0501@cvr.ac.in).'
+        });
+      }
+      extractedRoll = parts[0].trim();
+    } else {
+      extractedRoll = rawInput;
     }
 
-    if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+    // Validate extracted roll number or student handle
+    // Format: alphanumeric or underscores, 5-30 chars, no spaces or special symbols
+    const rollPattern = /^[a-zA-Z0-9_]{5,30}$/;
+    if (!rollPattern.test(extractedRoll)) {
       return res.status(400).json({
         success: false,
-        message: 'Please enter a valid email address.'
+        message: 'Invalid roll number or email format. Roll numbers must be alphanumeric without spaces or symbols.'
       });
     }
 
+    // Construct destination email strictly as <rollno>@cvr.ac.in
+    const cleanEmail = `${extractedRoll.toLowerCase()}@cvr.ac.in`;
     const normPurpose = normalizeOtpPurpose(purpose);
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || '';
     const now = Date.now();
 
-    // 1. Rate Limits & Cooldown Check (Relaxed to 5s cooldown to prevent lockouts)
+    // 1. Rate Limits & Cooldown Check (30-second cooldown between requests)
     if (isSupabaseAdminConfigured()) {
       try {
         const rateLimitResult = await dbCheckOtpRateLimits({ email: cleanEmail, ipAddress: clientIp });
@@ -974,8 +955,8 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
         const latest = await dbGetLatestOtpChallenge(cleanEmail, normPurpose);
         if (latest && latest.last_sent_at) {
           const elapsed = now - new Date(latest.last_sent_at).getTime();
-          if (elapsed < 5000) {
-            const waitSeconds = Math.ceil((5000 - elapsed) / 1000);
+          if (elapsed < 30000) {
+            const waitSeconds = Math.ceil((30000 - elapsed) / 1000);
             return res.status(429).json({
               success: false,
               message: `Please wait ${waitSeconds}s before requesting a new OTP.`
@@ -989,8 +970,8 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
       // In-Memory Fallback Check
       const storeKey = `${cleanEmail}:${normPurpose}`;
       const existing = otpStore.get(storeKey);
-      if (existing && existing.lastSentAt && (now - existing.lastSentAt < 5000)) {
-        const waitSeconds = Math.ceil((5000 - (now - existing.lastSentAt)) / 1000);
+      if (existing && existing.lastSentAt && (now - existing.lastSentAt < 30000)) {
+        const waitSeconds = Math.ceil((30000 - (now - existing.lastSentAt)) / 1000);
         return res.status(429).json({
           success: false,
           message: `Please wait ${waitSeconds}s before requesting a new OTP.`
@@ -1029,10 +1010,10 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
       lastSentAt: now,
     });
 
-    console.log(`[AUTH] 🔑 OTP challenge generated for: ${cleanEmail} (Purpose: ${normPurpose}) - OTP: ${otp}`);
+    console.log(`[AUTH] 🔑 OTP challenge generated for: ${cleanEmail} (Purpose: ${normPurpose})`);
 
     const purposeTitle = normPurpose === 'password_reset' ? 'Password Reset' : 'Account Registration';
-    const subject = `🍔 Deliz Verification Code: ${otp}`;
+    const subject = `Deliz Verification Code: ${otp}`;
     const textContent = `Hello,\n\nYour 6-digit Deliz verification OTP for ${purposeTitle} is: ${otp}\nThis code will expire in 5 minutes.\n\nEnjoy your food at Deliz!`;
     const htmlContent = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0B0F19; color: #ffffff; padding: 28px; border-radius: 16px; max-width: 480px; margin: auto; border: 1px solid #1F2937;">
@@ -1052,15 +1033,21 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
     `;
 
     try {
+      const forceReal = req.headers['x-force-real-email'] === 'true';
       await sendVerificationEmail({
         to: cleanEmail,
         subject,
         htmlContent,
         textContent,
+        forceReal,
       });
       console.log(`[AUTH] ✅ Verification email dispatched successfully to ${cleanEmail}`);
     } catch (mailErr) {
-      console.warn(`[AUTH] ⚠️ Email dispatch notice for ${cleanEmail}:`, mailErr.message);
+      console.error(`[AUTH] ❌ Brevo dispatch failure for ${cleanEmail}:`, mailErr.message);
+      return res.status(502).json({
+        success: false,
+        message: `Failed to dispatch OTP email via Brevo: ${mailErr.message}. Please check your Brevo sender configuration.`
+      });
     }
 
     return res.json({
@@ -1081,13 +1068,25 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
 
 app.post('/api/verify-otp', otpVerifyLimiter.middleware((req) => req.body?.email), async (req, res) => {
   try {
-    const { email, otp, purpose = 'registration' } = req.body;
+    const { email, rollNo, otp, purpose = 'registration' } = req.body;
 
-    if (!email || !otp) {
-      return res.status(400).json({ success: false, verified: false, message: 'Email and 6-digit OTP code are required.' });
+    const rawInput = (rollNo || email || '').toString().trim();
+    if (!rawInput || !otp) {
+      return res.status(400).json({ success: false, verified: false, message: 'Roll number or email and 6-digit OTP code are required.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    let extractedRoll = '';
+    if (rawInput.includes('@')) {
+      const parts = rawInput.split('@');
+      if (parts.length !== 2 || parts[1].toLowerCase() !== 'cvr.ac.in') {
+        return res.status(400).json({ success: false, verified: false, message: 'College email must end with @cvr.ac.in.' });
+      }
+      extractedRoll = parts[0].trim();
+    } else {
+      extractedRoll = rawInput;
+    }
+
+    const cleanEmail = `${extractedRoll.toLowerCase()}@cvr.ac.in`;
     const cleanOtp = otp.toString().trim();
     const normPurpose = normalizeOtpPurpose(purpose);
 
@@ -1173,7 +1172,7 @@ app.post('/api/verify-otp', otpVerifyLimiter.middleware((req) => req.body?.email
       });
     }
 
-    console.log(`[AUTH] ✅ OTP successfully verified for email: ${cleanEmail}`);
+    console.log(`[AUTH] ✅ OTP successfully verified for: ${cleanEmail}`);
 
     let resetToken = undefined;
     if (normPurpose === 'password_reset') {
@@ -1192,6 +1191,10 @@ app.post('/api/verify-otp', otpVerifyLimiter.middleware((req) => req.body?.email
     } else if (dbChallenge?.id) {
       await dbMarkOtpVerified(dbChallenge.id);
     }
+
+    // Invalidate in-memory challenge once verified to prevent replay
+    const storeKey = `${cleanEmail}:${normPurpose}`;
+    otpStore.delete(storeKey);
 
     return res.json({
       success: true,
@@ -4177,7 +4180,7 @@ export const gracefulShutdown = (signal = 'SIGTERM', server = serverInstance) =>
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-export { app, serverInstance, isShuttingDown, metricsTracker };
+export { app, serverInstance, isShuttingDown, metricsTracker, otpStore, resetTokenStore };
 
 if (process.env.NODE_ENV !== 'test' && (!process.argv[1] || process.argv[1].endsWith('server.js'))) {
   startServer(PORT);
