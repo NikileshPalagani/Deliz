@@ -1217,15 +1217,15 @@ export const dbCheckOtpRateLimits = async ({ email, ipAddress }) => {
         .ilike('email', cleanEmail)
         .gte('created_at', fifteenMinsAgo);
 
-      if (!emailErr && emailCount && emailCount >= 5) {
+      if (!emailErr && emailCount && emailCount >= 50) {
         return {
           limited: true,
-          reason: 'Too many OTP requests for this email. Please wait 15 minutes before requesting again.',
+          reason: 'Too many OTP requests for this email. Please wait a few minutes before requesting again.',
         };
       }
     }
 
-    // Check IP rate limit
+    // Check IP rate limit (relaxed to 500 requests per 15 min to accommodate shared campus NAT / Wi-Fi)
     if (ipAddress && ipAddress !== '127.0.0.1' && ipAddress !== '::1') {
       const { count: ipCount, error: ipErr } = await supabaseAdmin
         .from('otp_challenges')
@@ -1233,10 +1233,10 @@ export const dbCheckOtpRateLimits = async ({ email, ipAddress }) => {
         .eq('ip_address', ipAddress)
         .gte('created_at', fifteenMinsAgo);
 
-      if (!ipErr && ipCount && ipCount >= 20) {
+      if (!ipErr && ipCount && ipCount >= 500) {
         return {
           limited: true,
-          reason: 'Too many OTP requests from your network. Please wait 15 minutes.',
+          reason: 'Too many OTP requests from your network. Please wait a few minutes.',
         };
       }
     }

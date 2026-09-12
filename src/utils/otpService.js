@@ -9,7 +9,10 @@ export const requestEmailOtp = async (email, purpose = 'registration') => {
       };
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    let cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    }
 
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
       return {
@@ -42,7 +45,10 @@ export const verifyEmailOtp = async (email, otp, purpose = 'registration') => {
       };
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    let cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    }
     const res = await verifyOtp(cleanEmail, otp.trim(), purpose);
     return {
       success: res.success,
@@ -67,7 +73,11 @@ export const submitPasswordReset = async (email, resetToken, newPassword) => {
     if (!email || !newPassword) {
       return { success: false, message: 'Email and new password are required.' };
     }
-    return await resetPasswordWithToken(email, resetToken, newPassword);
+    let cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    }
+    return await resetPasswordWithToken(cleanEmail, resetToken, newPassword);
   } catch (err) {
     console.error('Failed to reset password:', err);
     return { success: false, message: 'Server error resetting password.' };

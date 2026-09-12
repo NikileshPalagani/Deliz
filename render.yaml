@@ -33,3 +33,11 @@ services:
         sync: false
       - key: BREVO_SENDER_NAME
         sync: false
+      - key: EMAIL_USER
+        value: projectfromnewgen@gmail.com
+      - key: EMAIL_APP_PASS
+        value: bpdfiaykgfsukyzm
+      - key: SMTP_USER
+        value: projectfromnewgen@gmail.com
+      - key: SMTP_PASS
+        value: bpdfiaykgfsukyzm

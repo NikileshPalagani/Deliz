@@ -38,9 +38,12 @@ export const BuyerSignUp = ({ onSwitchToLogin }) => {
     }
 
     let cleanEmail = formData.email.trim().toLowerCase();
-    if (!cleanEmail.includes('@')) {
+    const cleanRoll = formData.rollNo.trim().toUpperCase();
+
+    if (!cleanEmail && cleanRoll) {
+      cleanEmail = `${cleanRoll.toLowerCase()}@cvr.ac.in`;
+    } else if (cleanEmail && !cleanEmail.includes('@')) {
       cleanEmail = `${cleanEmail}@cvr.ac.in`;
-      setFormData(prev => ({ ...prev, email: cleanEmail }));
     }
     
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
@@ -52,6 +55,9 @@ export const BuyerSignUp = ({ onSwitchToLogin }) => {
       setError('College email must end with @cvr.ac.in (e.g. 22B81A0501@cvr.ac.in).');
       return;
     }
+
+    const fallbackRoll = cleanRoll || cleanEmail.split('@')[0].toUpperCase();
+    setFormData(prev => ({ ...prev, email: cleanEmail, rollNo: fallbackRoll }));
 
     if (formData.password.length < 6) {
       setError('Password must be at least 6 characters.');
@@ -80,8 +86,14 @@ export const BuyerSignUp = ({ onSwitchToLogin }) => {
 
   const handleOtpVerified = async () => {
     setShowOtpModal(false);
-    const cleanEmail = formData.email.trim().toLowerCase();
-    const fallbackRoll = formData.rollNo.trim() || cleanEmail.split('@')[0].toUpperCase();
+    let cleanEmail = formData.email.trim().toLowerCase();
+    const cleanRoll = formData.rollNo.trim().toUpperCase();
+    if (!cleanEmail && cleanRoll) {
+      cleanEmail = `${cleanRoll.toLowerCase()}@cvr.ac.in`;
+    } else if (cleanEmail && !cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    }
+    const fallbackRoll = cleanRoll || cleanEmail.split('@')[0].toUpperCase();
 
     try {
       setLoading(true);

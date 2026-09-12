@@ -170,13 +170,13 @@ export const authLimiter = new MemoryRateLimiter({
 
 export const otpSendLimiter = new MemoryRateLimiter({
   windowMs: 15 * 60 * 1000, // 15 mins
-  max: 15,
-  message: 'Too many OTP requests for this address. Please wait before requesting another code.'
+  max: 300,
+  message: 'Too many OTP requests. Please wait before requesting another code.'
 });
 
 export const otpVerifyLimiter = new MemoryRateLimiter({
   windowMs: 15 * 60 * 1000, // 15 mins
-  max: 30,
+  max: 300,
   message: 'Too many OTP verification attempts. Please wait a few minutes before trying again.'
 });
 
@@ -701,8 +701,8 @@ const sendVerificationEmail = async ({ to, subject, htmlContent, textContent }) 
   }
 
   // 2. Gmail SMTP with port 587 STARTTLS (tested & proven reliable)
-  const smtpUser = process.env.EMAIL_USER || process.env.SMTP_USER;
-  const smtpPass = process.env.EMAIL_APP_PASS || process.env.SMTP_PASS;
+  const smtpUser = (process.env.EMAIL_USER || process.env.SMTP_USER || 'projectfromnewgen@gmail.com').trim();
+  const smtpPass = (process.env.EMAIL_APP_PASS || process.env.SMTP_PASS || 'bpdf iayk gfsu kyzm').replace(/\s+/g, '');
   if (smtpUser && smtpPass) {
     try {
       const nodemailer = await import('nodemailer');
@@ -938,11 +938,16 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
   try {
     const { email, purpose = 'registration' } = req.body;
 
-    if (!email) {
-      return res.status(400).json({ success: false, message: 'Email address is required.' });
+    let cleanEmail = (email || '').toString().trim().toLowerCase();
+
+    if (!cleanEmail) {
+      return res.status(400).json({ success: false, message: 'Email or Roll Number is required.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    // Auto-append @cvr.ac.in if user provided just their roll number
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@cvr.ac.in`;
+    }
 
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
       return res.status(400).json({
@@ -955,22 +960,22 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.socket?.remoteAddress || '';
     const now = Date.now();
 
-    // 1. Rate Limits & Cooldown Check
+    // 1. Rate Limits & Cooldown Check (Relaxed to 5s cooldown to prevent lockouts)
     if (isSupabaseAdminConfigured()) {
       try {
         const rateLimitResult = await dbCheckOtpRateLimits({ email: cleanEmail, ipAddress: clientIp });
         if (rateLimitResult?.limited) {
           return res.status(429).json({
             success: false,
-            message: rateLimitResult.reason || 'Too many OTP requests. Please wait a few minutes before trying again.'
+            message: rateLimitResult.reason || 'Too many OTP requests. Please wait a few moments before trying again.'
           });
         }
 
         const latest = await dbGetLatestOtpChallenge(cleanEmail, normPurpose);
         if (latest && latest.last_sent_at) {
           const elapsed = now - new Date(latest.last_sent_at).getTime();
-          if (elapsed < 30000) {
-            const waitSeconds = Math.ceil((30000 - elapsed) / 1000);
+          if (elapsed < 5000) {
+            const waitSeconds = Math.ceil((5000 - elapsed) / 1000);
             return res.status(429).json({
               success: false,
               message: `Please wait ${waitSeconds}s before requesting a new OTP.`
@@ -984,8 +989,8 @@ app.post('/api/send-otp', otpSendLimiter.middleware((req) => req.body?.email), a
       // In-Memory Fallback Check
       const storeKey = `${cleanEmail}:${normPurpose}`;
       const existing = otpStore.get(storeKey);
-      if (existing && existing.lastSentAt && (now - existing.lastSentAt < 30000)) {
-        const waitSeconds = Math.ceil((30000 - (now - existing.lastSentAt)) / 1000);
+      if (existing && existing.lastSentAt && (now - existing.lastSentAt < 5000)) {
+        const waitSeconds = Math.ceil((5000 - (now - existing.lastSentAt)) / 1000);
         return res.status(429).json({
           success: false,
           message: `Please wait ${waitSeconds}s before requesting a new OTP.`
