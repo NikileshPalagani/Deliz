@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: campus-bite
+    name: deliz
     runtime: node
     # Plan note: 'free' works for initial deployment/prototyping.
     # Recommended for 8,000+ student production traffic: 'starter' (512MB RAM, 0.5 CPU) or 'standard' (2GB RAM, 1 CPU) with auto-scaling.

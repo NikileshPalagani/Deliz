@@ -10,7 +10,7 @@
     "build": "node scripts/build.js",
     "preview": "vite preview",
     "start": "node server.js",
-    "test": "node scripts/test-phase9.js",
+    "test": "node --env-file-if-exists=.env.test scripts/test-phase9.js",
     "test:phase1": "node scripts/test-phase1.js",
     "test:phase2": "node scripts/test-phase2.js",
     "test:phase3": "node scripts/test-phase3.js",
@@ -54,7 +54,6 @@
   },
   "devDependencies": {
     "autocannon": "^8.0.0",
-    "concurrently": "^9.1.2",
-    "localtunnel": "^2.0.2"
+    "concurrently": "^9.1.2"
   }
 }
