@@ -4,7 +4,6 @@ import {
   X,
   CheckCircle2,
   Building,
-  Sparkles,
   Copy,
   Check
 } from 'lucide-react';
@@ -17,14 +16,33 @@ export const OrderQrModal = () => {
 
   if (!activeQrOrder) return null;
 
-  const isClaimed = activeQrOrder.orderStatus === 'CLAIMED';
-  // Use compact token for high-contrast, bold, instant barcode scanning
-  const qrPayload = activeQrOrder.token || activeQrOrder.id;
+  // `claimedAt` is also accepted because it is an irreversible server receipt.
+  // This prevents an old cached status string from displaying a used pass active.
+  const isClaimed = String(activeQrOrder.orderStatus || activeQrOrder.order_status || '').toUpperCase() === 'CLAIMED' || Boolean(activeQrOrder.claimedAt || activeQrOrder.claimed_at);
+  
+  // Use compact token for high-contrast, bold, instant barcode scanning (guaranteed string)
+  const qrPayload = String(activeQrOrder.token || activeQrOrder.id || '');
+
+  // Safely normalize items regardless of whether backend returns array, JSON string, or text
+  const safeItems = Array.isArray(activeQrOrder.items)
+    ? activeQrOrder.items
+    : (typeof activeQrOrder.items === 'string'
+        ? (() => {
+            try {
+              const parsed = JSON.parse(activeQrOrder.items);
+              return Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : [{ name: activeQrOrder.items, quantity: 1, price: 0 }]);
+            } catch {
+              return [{ name: activeQrOrder.items, quantity: 1, price: 0 }];
+            }
+          })()
+        : (activeQrOrder.items && typeof activeQrOrder.items === 'object' ? [activeQrOrder.items] : []));
 
   const handleCopyOrderId = () => {
-    navigator.clipboard?.writeText(activeQrOrder.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (activeQrOrder.id) {
+      navigator.clipboard?.writeText(String(activeQrOrder.id));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const formatClaimedTime = (dateStr) => {
@@ -36,6 +54,34 @@ export const OrderQrModal = () => {
       return '';
     }
   };
+
+  // Ask the same authoritative QR validation endpoint used by the counter.
+  // This is independent of Realtime and the student's cached order list: as
+  // soon as a vendor claim reaches the server, the rendered QR expires.
+  useEffect(() => {
+    if (!activeQrOrder?.token && !activeQrOrder?.id) return undefined;
+    let stopped = false;
+    const refreshClaimStatus = async () => {
+      try {
+        const data = await apiFetch('/api/orders/validate-qr', {
+          method: 'POST',
+          body: JSON.stringify({ token: activeQrOrder.token, orderId: activeQrOrder.id }),
+          timeoutMs: 5000,
+        });
+        if (!stopped && data?.order) {
+          setActiveQrOrder(previous => previous?.id === data.order.id ? { ...previous, ...data.order } : previous);
+        }
+      } catch (pollErr) {
+        console.warn('[OrderQrModal] Status refresh note:', pollErr);
+      }
+    };
+    refreshClaimStatus();
+    const timer = window.setInterval(refreshClaimStatus, 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [activeQrOrder?.id, activeQrOrder?.token, setActiveQrOrder]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in overflow-y-auto">
@@ -67,7 +113,7 @@ export const OrderQrModal = () => {
           </h2>
           <div className="flex items-center justify-center gap-2 mt-1">
             <span className="font-mono text-xs text-orange-400 font-bold">
-              Order ID: #{activeQrOrder.id}
+              Order ID: #{activeQrOrder.id || 'N/A'}
             </span>
             <button
               onClick={handleCopyOrderId}
@@ -104,22 +150,9 @@ export const OrderQrModal = () => {
           <p className="text-[11px] text-gray-400 mt-3 text-center max-w-xs leading-relaxed">
             {!isClaimed
               ? 'Present this digital QR code to the canteen counter vendor to collect your food.'
-              : `Handed over by ${activeQrOrder.claimedBy || 'canteen vendor'}${formatClaimedTime(activeQrOrder.claimedAt)}`}
+              : `Handed over by ${activeQrOrder.claimedBy || activeQrOrder.claimed_by || 'canteen vendor'}${formatClaimedTime(activeQrOrder.claimedAt || activeQrOrder.claimed_at)}`}
           </p>
         </div>
-
-        {/* Reward Coins Banner */}
-        {activeQrOrder.coinsEarned > 0 && (
-          <div className="p-2.5 bg-gradient-to-r from-amber-950/40 via-orange-950/40 to-amber-950/40 border border-amber-500/40 rounded-2xl flex items-center justify-between mb-3 text-xs">
-            <div className="flex items-center gap-2 text-amber-300 font-bold">
-              <Sparkles className="w-4 h-4 text-orange-400" />
-              <span>Bonus Coins Earned:</span>
-            </div>
-            <span className="font-extrabold text-orange-400 text-xs">
-              +{activeQrOrder.coinsEarned} Coins 🪙
-            </span>
-          </div>
-        )}
 
         {/* Order Details Breakdown */}
         <div className="bg-gray-900/80 border border-gray-800 rounded-2xl p-3.5 space-y-2 text-xs">
@@ -128,23 +161,28 @@ export const OrderQrModal = () => {
             <span className="text-gray-400">Campus Location:</span>
             <span className="font-bold text-white flex items-center gap-1.5">
               <Building className="w-3.5 h-3.5 text-orange-400" />
-              {activeQrOrder.block} Block
+              {activeQrOrder.block || 'CB'} Block
             </span>
           </div>
 
           <div className="py-1 space-y-1">
             <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Snacks Included:</div>
-            {activeQrOrder.items?.map((item, idx) => (
-              <div key={idx} className="flex justify-between items-center text-gray-200">
-                <span>{item.quantity}x {item.name}</span>
-                <span className="font-semibold text-gray-400">₹{item.price * item.quantity}</span>
-              </div>
-            ))}
+            {safeItems.map((item, idx) => {
+              const itemName = item?.name || (typeof item === 'string' ? item : 'Snack Item');
+              const itemQuantity = Number(item?.quantity) || 1;
+              const itemPrice = Number(item?.price) || 0;
+              return (
+                <div key={idx} className="flex justify-between items-center text-gray-200">
+                  <span>{itemQuantity}x {itemName}</span>
+                  <span className="font-semibold text-gray-400">₹{itemPrice * itemQuantity}</span>
+                </div>
+              );
+            })}
           </div>
 
           <div className="pt-2 border-t border-gray-800 flex justify-between items-center">
-            <span className="text-gray-400">Total Paid ({activeQrOrder.paymentMethod}):</span>
-            <span className="text-sm font-black text-orange-400">₹{activeQrOrder.finalAmount}</span>
+            <span className="text-gray-400">Total Paid ({activeQrOrder.paymentMethod || activeQrOrder.payment_method || 'UPI'}):</span>
+            <span className="text-sm font-black text-orange-400">₹{activeQrOrder.finalAmount ?? activeQrOrder.final_amount ?? activeQrOrder.totalAmount ?? 0}</span>
           </div>
 
         </div>
@@ -161,3 +199,5 @@ export const OrderQrModal = () => {
     </div>
   );
 };
+
+export default OrderQrModal;

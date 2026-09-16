@@ -4,8 +4,9 @@ import { QrCode, Eye, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export const QrHistory = () => {
-  const { orders, setActiveQrOrder, setCurrentTab } = useApp();
-  const safeOrders = Array.isArray(orders) ? orders.filter(Boolean) : [];
+  const { orders = [], setActiveQrOrder, setCurrentTab } = useApp();
+
+  const validOrders = Array.isArray(orders) ? orders.filter(Boolean) : [];
 
   return (
     <div className="max-w-md mx-auto px-4 pb-28 pt-4 sm:pt-6">
@@ -19,7 +20,7 @@ export const QrHistory = () => {
         </p>
       </div>
 
-      {safeOrders.length === 0 ? (
+      {validOrders.length === 0 ? (
         <div className="bg-[#111827] border border-gray-800 rounded-3xl p-10 text-center">
           <QrCode className="w-12 h-12 text-gray-600 mx-auto mb-3" />
           <h3 className="text-base font-bold text-white mb-1">No QR passes available</h3>
@@ -35,17 +36,34 @@ export const QrHistory = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {safeOrders.map((order) => {
-            const isClaimed = order.orderStatus === 'CLAIMED';
-            const qrPayload = order.token || order.id;
+          {validOrders.map((order) => {
+            const isClaimed = String(order.orderStatus || order.order_status || '').toUpperCase() === 'CLAIMED' || Boolean(order.claimedAt || order.claimed_at);
+            const qrPayload = String(order.token || order.id || '');
+
+            const safeItems = Array.isArray(order.items)
+              ? order.items
+              : (typeof order.items === 'string'
+                  ? (() => {
+                      try {
+                        const parsed = JSON.parse(order.items);
+                        return Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : [{ name: order.items, quantity: 1, price: 0 }]);
+                      } catch {
+                        return [{ name: order.items, quantity: 1, price: 0 }];
+                      }
+                    })()
+                  : (order.items && typeof order.items === 'object' ? [order.items] : []));
+
+            const itemsSummary = safeItems.length > 0
+              ? safeItems.map(i => `${Number(i?.quantity) || 1}x ${i?.name || (typeof i === 'string' ? i : 'Item')}`).join(', ')
+              : 'Snacks Order';
 
             return (
               <div
-                key={order.id}
+                key={order.id || Math.random()}
                 className="bg-[#111827] border border-gray-800 rounded-3xl p-5 shadow-card-dark flex flex-col justify-between items-center text-center relative overflow-hidden group hover:border-gray-700 transition"
               >
                 <div className="w-full flex items-center justify-between mb-3 text-xs">
-                  <span className="font-mono font-bold text-orange-400">#{order.id}</span>
+                  <span className="font-mono font-bold text-orange-400">#{order.id || 'N/A'}</span>
                   <span
                     className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
                       isClaimed
@@ -74,12 +92,12 @@ export const QrHistory = () => {
 
                 <div className="mt-4 w-full">
                   <div className="text-xs font-bold text-white truncate">
-                    {Array.isArray(order.items) ? order.items.map(i => i ? `${i.quantity || 1}x ${i.name || 'Item'}` : '').filter(Boolean).join(', ') : ''}
+                    {itemsSummary}
                   </div>
                   <div className="text-[11px] text-gray-400 mt-1 flex items-center justify-center gap-2">
-                    <span>{order.block} Block</span>
+                    <span>{order.block || 'CB'} Block</span>
                     <span>•</span>
-                    <span className="font-bold text-orange-400">₹{order.finalAmount}</span>
+                    <span className="font-bold text-orange-400">₹{order.finalAmount ?? order.final_amount ?? order.totalAmount ?? 0}</span>
                   </div>
 
                   <button
@@ -98,3 +116,5 @@ export const QrHistory = () => {
     </div>
   );
 };
+
+export default QrHistory;

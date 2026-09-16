@@ -3,20 +3,30 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const supabaseUrl = (process.env.SUPABASE_URL || '').trim();
+const rawSupabaseUrl = (process.env.SUPABASE_URL || '').trim();
 const supabaseServiceRoleKey = (
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   ''
 ).trim();
 
-export const isSupabaseAdminConfigured = () => {
-  return Boolean(
-    supabaseUrl &&
-    supabaseServiceRoleKey &&
-    supabaseUrl.startsWith('https://') &&
-    !supabaseUrl.includes('your-project-ref')
+export const isValidSupabaseUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.trim().toLowerCase();
+  return (
+    clean.startsWith('https://') &&
+    clean.includes('.supabase.co') &&
+    !clean.includes('onrender.com') &&
+    !clean.includes('localhost') &&
+    !clean.includes('127.0.0.1') &&
+    !clean.includes('your-project-ref')
   );
+};
+
+const supabaseUrl = isValidSupabaseUrl(rawSupabaseUrl) ? rawSupabaseUrl : '';
+
+export const isSupabaseAdminConfigured = () => {
+  return Boolean(supabaseUrl && supabaseServiceRoleKey);
 };
 
 let supabaseAdmin = null;
@@ -30,9 +40,15 @@ if (isSupabaseAdminConfigured()) {
   });
   console.log(`⚡ [SUPABASE ADMIN INITIALIZED] Server-side PostgreSQL Client Connected to: ${supabaseUrl}`);
 } else {
-  console.warn(
-    '⚠️ [SUPABASE ADMIN NOT CONFIGURED] Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment variables for PostgreSQL persistence.'
-  );
+  if (rawSupabaseUrl && !isValidSupabaseUrl(rawSupabaseUrl)) {
+    console.error(
+      `❌ [CONFIG ERROR] SUPABASE_URL is invalid: "${rawSupabaseUrl}". SUPABASE_URL must be your actual project URL from app.supabase.com (https://<project-ref>.supabase.co), NOT your Render deployment URL or localhost.`
+    );
+  } else {
+    console.warn(
+      '⚠️ [SUPABASE ADMIN NOT CONFIGURED] Set SUPABASE_URL (e.g. https://<project-ref>.supabase.co) and SUPABASE_SERVICE_ROLE_KEY in environment variables.'
+    );
+  }
 }
 
 export { supabaseAdmin };
@@ -43,33 +59,52 @@ export { supabaseAdmin };
 
 export const mapOrderFromDb = (row) => {
   if (!row) return null;
+  // claimed_at is the irreversible source of truth for a pickup pass. Treat it
+  // as CLAIMED even if a legacy client/database process left order_status stale.
+  const claimedAt = row.claimed_at || row.claimedAt || null;
+
+  let items = [];
+  if (Array.isArray(row.items)) {
+    items = row.items;
+  } else if (typeof row.items === 'string') {
+    try {
+      const parsed = JSON.parse(row.items);
+      items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : [{ name: row.items, quantity: 1, price: 0 }]);
+    } catch {
+      items = [{ name: row.items, quantity: 1, price: 0 }];
+    }
+  } else if (row.items && typeof row.items === 'object') {
+    items = [row.items];
+  }
+
   return {
     id: row.id,
     token: row.token,
-    studentEmail: row.student_email,
-    studentName: row.student_name,
-    studentPhone: row.student_phone || '',
-    block: row.block,
+    studentEmail: row.student_email || row.studentEmail || '',
+    studentName: row.student_name || row.studentName || 'Student',
+    studentPhone: row.student_phone || row.studentPhone || '',
+    block: row.block || 'CB',
     floor: row.floor || null,
-    items: row.items || [],
-    totalAmount: Number(row.total_amount) || 0,
-    discount: Number(row.discount) || 0,
-    finalAmount: Number(row.final_amount) || 0,
-    coinsEarned: Number(row.coins_earned) || 0,
-    coinsRedeemed: Number(row.coins_redeemed) || 0,
-    paymentMethod: row.payment_method || 'UPI',
-    transactionId: row.transaction_id || null,
-    razorpayOrderId: row.razorpay_order_id || null,
-    paymentStatus: row.payment_status || 'PAID',
-    orderStatus: row.order_status || 'PENDING_PICKUP',
-    claimedBy: row.claimed_by || null,
-    claimedAt: row.claimed_at || null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    items,
+    totalAmount: Number(row.total_amount ?? row.totalAmount ?? 0),
+    discount: Number(row.discount ?? 0),
+    finalAmount: Number(row.final_amount ?? row.finalAmount ?? 0),
+    coinsEarned: Number(row.coins_earned ?? row.coinsEarned ?? 0),
+    coinsRedeemed: Number(row.coins_redeemed ?? row.coinsRedeemed ?? 0),
+    paymentMethod: row.payment_method || row.paymentMethod || 'UPI',
+    transactionId: row.transaction_id || row.transactionId || null,
+    razorpayOrderId: row.razorpay_order_id || row.razorpayOrderId || null,
+    paymentStatus: row.payment_status || row.paymentStatus || 'PAID',
+    orderStatus: claimedAt ? 'CLAIMED' : (row.order_status || row.orderStatus || 'PENDING_PICKUP'),
+    claimedBy: row.claimed_by || row.claimedBy || null,
+    claimedAt,
+    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || row.updatedAt || new Date().toISOString(),
   };
 };
 
 export const mapOrderToDb = (order) => {
+  const claimedAt = order.claimedAt || order.claimed_at || null;
   return {
     id: order.id,
     token: order.token,
@@ -88,9 +123,9 @@ export const mapOrderToDb = (order) => {
     transaction_id: order.transactionId || null,
     razorpay_order_id: order.razorpayOrderId || null,
     payment_status: order.paymentStatus || 'PAID',
-    order_status: order.orderStatus || 'PENDING_PICKUP',
+    order_status: claimedAt ? 'CLAIMED' : (order.orderStatus || 'PENDING_PICKUP'),
     claimed_by: order.claimedBy || null,
-    claimed_at: order.claimedAt || null,
+    claimed_at: claimedAt,
     created_at: order.createdAt || new Date().toISOString(),
     updated_at: order.updatedAt || new Date().toISOString(),
   };
@@ -295,29 +330,22 @@ export const dbClaimOrderAtomic = async ({ token, orderId, vendorId, vendorEmail
   const cleanVendor = (vendorId || 'Vendor').trim();
   const cleanEmail = vendorEmail ? vendorEmail.trim().toLowerCase() : null;
 
-  try {
-    const { data: rpcData, error: rpcError } = await supabaseAdmin.rpc('claim_order_atomic', {
-      p_identifier: identifier,
-      p_vendor_id: cleanVendor,
-      p_vendor_email: cleanEmail,
-    });
-    if (!rpcError && rpcData && rpcData.length > 0) {
-      const res = rpcData[0];
-      return {
-        success: res.success,
-        alreadyClaimed: res.already_claimed,
-        notFound: res.not_found,
-        newlyClaimed: res.newly_claimed || false,
-        status: res.status || (res.success ? 'SUCCESS' : (res.already_claimed ? 'ALREADY_CLAIMED' : 'ERROR')),
-        order: res.order_data ? mapOrderFromDb(res.order_data) : null,
-        claimedBy: res.claimed_by,
-        claimedAt: res.claimed_at,
-        message: res.message,
-      };
-    }
-  } catch (e) {}
+  if (!identifier) {
+    return {
+      success: false,
+      alreadyClaimed: false,
+      notFound: true,
+      newlyClaimed: false,
+      status: 'NOT_FOUND',
+      message: 'Order QR not found or invalid token.',
+      order: null,
+    };
+  }
 
-  // Direct SQL conditional atomic update with row locking guarantee
+  // A conditional UPDATE is atomic in PostgreSQL: concurrent scanners can
+  // target the same row, but only one can change it to CLAIMED. Do not use a
+  // database RPC here, since older deployed RPC definitions can have stale
+  // status rules and leave a pass active after a scan.
   const nowIso = new Date().toISOString();
   const { data: updatedRows, error: updateError } = await supabaseAdmin
     .from('orders')
@@ -328,7 +356,8 @@ export const dbClaimOrderAtomic = async ({ token, orderId, vendorId, vendorEmail
       updated_at: nowIso,
     })
     .or(`id.eq.${identifier},token.eq.${identifier},id.ilike.${identifier},token.ilike.${identifier}`)
-    .in('order_status', ['READY', 'PENDING_PICKUP'])
+    .neq('order_status', 'CLAIMED')
+    .neq('order_status', 'CANCELLED')
     .in('payment_status', ['PAID', 'SUCCESS'])
     .select();
 
@@ -1041,42 +1070,48 @@ export const dbSaveOtpChallenge = async ({ email, purpose, otpHash, expiresAt, i
   const cleanEmail = email.trim().toLowerCase();
   const normPurpose = (purpose || 'registration').toLowerCase().includes('reset') ? 'password_reset' : 'registration';
 
-  try {
-    // 1. Invalidate previous active challenges for this email + purpose
-    await supabaseAdmin
-      .from('otp_challenges')
-      .update({ consumed_at: new Date().toISOString() })
-      .ilike('email', cleanEmail)
-      .eq('purpose', normPurpose)
-      .is('consumed_at', null);
+  // 1. Invalidate previous active challenges for this email + purpose
+  await supabaseAdmin
+    .from('otp_challenges')
+    .update({ consumed_at: new Date().toISOString() })
+    .ilike('email', cleanEmail)
+    .eq('purpose', normPurpose)
+    .is('consumed_at', null);
 
-    // 2. Insert new OTP challenge
-    const { data, error } = await supabaseAdmin
-      .from('otp_challenges')
-      .insert({
-        email: cleanEmail,
-        purpose: normPurpose,
-        otp_hash: otpHash,
-        expires_at: new Date(expiresAt).toISOString(),
-        attempts: 0,
-        max_attempts: 5,
-        last_sent_at: new Date().toISOString(),
-        ip_address: ipAddress || '',
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+  // 2. Insert new OTP challenge
+  const { data, error } = await supabaseAdmin
+    .from('otp_challenges')
+    .insert({
+      email: cleanEmail,
+      purpose: normPurpose,
+      otp_hash: otpHash,
+      expires_at: new Date(expiresAt).toISOString(),
+      attempts: 0,
+      max_attempts: 5,
+      last_sent_at: new Date().toISOString(),
+      ip_address: ipAddress || '',
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
 
-    if (error) {
-      console.warn('[DB] Supabase OTP challenge insert notice (falling back to memory):', error.message);
-      return null;
-    }
-
-    return data;
-  } catch (err) {
-    console.warn('[DB] Supabase OTP save exception (falling back to memory):', err.message);
-    return null;
+  if (error) {
+    console.error('[DB] Error inserting OTP challenge:', error.message);
+    throw error;
   }
+
+  return data;
+};
+
+/** Invalidates a challenge when its email could not be handed to the provider. */
+export const dbInvalidateOtpChallenge = async (challengeId) => {
+  if (!supabaseAdmin || !challengeId) return;
+  const { error } = await supabaseAdmin
+    .from('otp_challenges')
+    .update({ consumed_at: new Date().toISOString() })
+    .eq('id', challengeId)
+    .is('consumed_at', null);
+  if (error) console.warn('[DB] Could not invalidate undelivered OTP:', error.message);
 };
 
 /**
@@ -1087,27 +1122,22 @@ export const dbGetLatestOtpChallenge = async (email, purpose) => {
   const cleanEmail = email.trim().toLowerCase();
   const normPurpose = (purpose || 'registration').toLowerCase().includes('reset') ? 'password_reset' : 'registration';
 
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('otp_challenges')
-      .select('*')
-      .ilike('email', cleanEmail)
-      .eq('purpose', normPurpose)
-      .is('consumed_at', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from('otp_challenges')
+    .select('*')
+    .ilike('email', cleanEmail)
+    .eq('purpose', normPurpose)
+    .is('consumed_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    if (error) {
-      console.warn('[DB] Supabase fetch latest OTP challenge notice:', error.message);
-      return null;
-    }
-
-    return data;
-  } catch (err) {
-    console.warn('[DB] Supabase fetch latest OTP challenge exception:', err.message);
+  if (error) {
+    console.error('[DB] Error fetching latest OTP challenge:', error.message);
     return null;
   }
+
+  return data;
 };
 
 /**
@@ -1116,25 +1146,20 @@ export const dbGetLatestOtpChallenge = async (email, purpose) => {
 export const dbIncrementOtpAttempts = async (challengeId) => {
   if (!supabaseAdmin || !challengeId) return 1;
 
-  try {
-    const { data: challenge } = await supabaseAdmin
-      .from('otp_challenges')
-      .select('attempts, max_attempts')
-      .eq('id', challengeId)
-      .maybeSingle();
+  const { data: challenge } = await supabaseAdmin
+    .from('otp_challenges')
+    .select('attempts, max_attempts')
+    .eq('id', challengeId)
+    .maybeSingle();
 
-    const newAttempts = ((challenge?.attempts || 0) + 1);
+  const newAttempts = ((challenge?.attempts || 0) + 1);
 
-    await supabaseAdmin
-      .from('otp_challenges')
-      .update({ attempts: newAttempts })
-      .eq('id', challengeId);
+  await supabaseAdmin
+    .from('otp_challenges')
+    .update({ attempts: newAttempts })
+    .eq('id', challengeId);
 
-    return newAttempts;
-  } catch (err) {
-    console.warn('[DB] dbIncrementOtpAttempts notice:', err.message);
-    return 1;
-  }
+  return newAttempts;
 };
 
 /**
@@ -1143,26 +1168,22 @@ export const dbIncrementOtpAttempts = async (challengeId) => {
 export const dbMarkOtpVerified = async (challengeId, resetTokenHash = null, resetTokenExpiresAt = null) => {
   if (!supabaseAdmin || !challengeId) return;
 
-  try {
-    const updatePayload = {
-      verified_at: new Date().toISOString(),
-    };
+  const updatePayload = {
+    verified_at: new Date().toISOString(),
+  };
 
-    if (resetTokenHash) {
-      updatePayload.reset_token_hash = resetTokenHash;
-      updatePayload.reset_token_expires_at = new Date(resetTokenExpiresAt).toISOString();
-    } else {
-      // For registration, consume immediately after verification
-      updatePayload.consumed_at = new Date().toISOString();
-    }
-
-    await supabaseAdmin
-      .from('otp_challenges')
-      .update(updatePayload)
-      .eq('id', challengeId);
-  } catch (err) {
-    console.warn('[DB] dbMarkOtpVerified notice:', err.message);
+  if (resetTokenHash) {
+    updatePayload.reset_token_hash = resetTokenHash;
+    updatePayload.reset_token_expires_at = new Date(resetTokenExpiresAt).toISOString();
+  } else {
+    // For registration, consume immediately after verification
+    updatePayload.consumed_at = new Date().toISOString();
   }
+
+  await supabaseAdmin
+    .from('otp_challenges')
+    .update(updatePayload)
+    .eq('id', challengeId);
 };
 
 /**
@@ -1170,34 +1191,29 @@ export const dbMarkOtpVerified = async (challengeId, resetTokenHash = null, rese
  */
 export const dbVerifyAndConsumeResetToken = async (email, resetTokenHash) => {
   if (!supabaseAdmin || !email || !resetTokenHash) return false;
-  try {
-    const cleanEmail = email.trim().toLowerCase();
+  const cleanEmail = email.trim().toLowerCase();
 
-    const { data, error } = await supabaseAdmin
-      .from('otp_challenges')
-      .select('*')
-      .ilike('email', cleanEmail)
-      .eq('purpose', 'password_reset')
-      .eq('reset_token_hash', resetTokenHash)
-      .is('consumed_at', null)
-      .gt('reset_token_expires_at', new Date().toISOString())
-      .maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from('otp_challenges')
+    .select('*')
+    .ilike('email', cleanEmail)
+    .eq('purpose', 'password_reset')
+    .eq('reset_token_hash', resetTokenHash)
+    .is('consumed_at', null)
+    .gt('reset_token_expires_at', new Date().toISOString())
+    .maybeSingle();
 
-    if (error || !data) {
-      return false;
-    }
-
-    // Atomically consume token to prevent replay attacks
-    await supabaseAdmin
-      .from('otp_challenges')
-      .update({ consumed_at: new Date().toISOString() })
-      .eq('id', data.id);
-
-    return true;
-  } catch (err) {
-    console.warn('[DB] dbVerifyAndConsumeResetToken notice:', err.message);
+  if (error || !data) {
     return false;
   }
+
+  // Atomically consume token to prevent replay attacks
+  await supabaseAdmin
+    .from('otp_challenges')
+    .update({ consumed_at: new Date().toISOString() })
+    .eq('id', data.id);
+
+  return true;
 };
 
 /**
@@ -1205,47 +1221,42 @@ export const dbVerifyAndConsumeResetToken = async (email, resetTokenHash) => {
  */
 export const dbCheckOtpRateLimits = async ({ email, ipAddress }) => {
   if (!supabaseAdmin) return { limited: false };
-  try {
-    const cleanEmail = (email || '').trim().toLowerCase();
-    const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 
-    // Check email rate limit
-    if (cleanEmail) {
-      const { count: emailCount, error: emailErr } = await supabaseAdmin
-        .from('otp_challenges')
-        .select('*', { count: 'exact', head: true })
-        .ilike('email', cleanEmail)
-        .gte('created_at', fifteenMinsAgo);
+  // Check email rate limit
+  if (cleanEmail) {
+    const { count: emailCount } = await supabaseAdmin
+      .from('otp_challenges')
+      .select('*', { count: 'exact', head: true })
+      .ilike('email', cleanEmail)
+      .gte('created_at', fifteenMinsAgo);
 
-      if (!emailErr && emailCount && emailCount >= 50) {
-        return {
-          limited: true,
-          reason: 'Too many OTP requests for this email. Please wait a few minutes before requesting again.',
-        };
-      }
+    if (emailCount && emailCount >= 5) {
+      return {
+        limited: true,
+        reason: 'Too many OTP requests for this email. Please wait 15 minutes before requesting again.',
+      };
     }
-
-    // Check IP rate limit (relaxed to 500 requests per 15 min to accommodate shared campus NAT / Wi-Fi)
-    if (ipAddress && ipAddress !== '127.0.0.1' && ipAddress !== '::1') {
-      const { count: ipCount, error: ipErr } = await supabaseAdmin
-        .from('otp_challenges')
-        .select('*', { count: 'exact', head: true })
-        .eq('ip_address', ipAddress)
-        .gte('created_at', fifteenMinsAgo);
-
-      if (!ipErr && ipCount && ipCount >= 500) {
-        return {
-          limited: true,
-          reason: 'Too many OTP requests from your network. Please wait a few minutes.',
-        };
-      }
-    }
-
-    return { limited: false };
-  } catch (err) {
-    console.warn('[DB] dbCheckOtpRateLimits notice (allowing request):', err.message);
-    return { limited: false };
   }
+
+  // Check IP rate limit (generous threshold for shared campus Wi-Fi NAT gateways)
+  if (ipAddress && ipAddress !== '127.0.0.1' && ipAddress !== '::1') {
+    const { count: ipCount } = await supabaseAdmin
+      .from('otp_challenges')
+      .select('*', { count: 'exact', head: true })
+      .eq('ip_address', ipAddress)
+      .gte('created_at', fifteenMinsAgo);
+
+    if (ipCount && ipCount >= 300) {
+      return {
+        limited: true,
+        reason: 'Too many OTP requests from your network. Please wait 15 minutes.',
+      };
+    }
+  }
+
+  return { limited: false };
 };
 
 /**
@@ -1253,19 +1264,15 @@ export const dbCheckOtpRateLimits = async ({ email, ipAddress }) => {
  */
 export const dbCleanupExpiredOtpChallenges = async () => {
   if (!supabaseAdmin) return 0;
-  try {
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    const { error } = await supabaseAdmin
-      .from('otp_challenges')
-      .delete()
-      .lt('created_at', oneDayAgo);
+  const { error } = await supabaseAdmin
+    .from('otp_challenges')
+    .delete()
+    .lt('created_at', oneDayAgo);
 
-    if (error) {
-      console.warn('[DB] OTP cleanup notice:', error.message);
-    }
-  } catch (err) {
-    console.warn('[DB] dbCleanupExpiredOtpChallenges notice:', err.message);
+  if (error) {
+    console.warn('[DB] OTP cleanup notice:', error.message);
   }
 };
 

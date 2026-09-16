@@ -73,7 +73,7 @@ export const OrderHistory = () => {
       ) : (
         <div className="space-y-3.5">
           {filteredOrders.map((order) => {
-            const isClaimed = order.orderStatus === 'CLAIMED';
+            const isClaimed = String(order.orderStatus || '').toUpperCase() === 'CLAIMED' || Boolean(order.claimedAt || order.claimed_at);
             return (
               <div
                 key={order.id}
@@ -100,9 +100,28 @@ export const OrderHistory = () => {
                 </div>
 
                 {/* Items summary */}
-                <div className="text-xs font-semibold text-white">
-                  {Array.isArray(order.items) ? order.items.map(i => i ? `${i.quantity || 1}x ${i.name || 'Item'}` : '').filter(Boolean).join(' • ') : ''}
-                </div>
+                {(() => {
+                  const safeItems = Array.isArray(order.items)
+                    ? order.items
+                    : (typeof order.items === 'string'
+                        ? (() => {
+                            try {
+                              const parsed = JSON.parse(order.items);
+                              return Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : [{ name: order.items, quantity: 1, price: 0 }]);
+                            } catch {
+                              return [{ name: order.items, quantity: 1, price: 0 }];
+                            }
+                          })()
+                        : (order.items && typeof order.items === 'object' ? [order.items] : []));
+                  const summary = safeItems.length > 0
+                    ? safeItems.map(i => `${Number(i?.quantity) || 1}x ${i?.name || (typeof i === 'string' ? i : 'Item')}`).join(' • ')
+                    : 'Order Items';
+                  return (
+                    <div className="text-xs font-semibold text-white">
+                      {summary}
+                    </div>
+                  );
+                })()}
 
                 {/* Location & payment info */}
                 <div className="flex items-center justify-between text-[11px] text-gray-400 pt-2 border-t border-gray-800/80">
@@ -134,3 +153,5 @@ export const OrderHistory = () => {
     </div>
   );
 };
+
+export default OrderHistory;
