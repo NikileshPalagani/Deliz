@@ -1,32 +1,90 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Component } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   X,
   CheckCircle2,
   Building,
   Copy,
-  Check
+  Check,
+  QrCode,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { apiFetch } from '../../utils/api';
 
-export const OrderQrModal = () => {
-  const { activeQrOrder, setActiveQrOrder } = useApp();
-  const [copied, setCopied] = useState(false);
+/**
+ * Localized Error Boundary for OrderQrModal
+ * Guarantees that any unexpected rendering issue inside the QR modal
+ * displays a localized, clean fallback dialog without crashing the main app tree.
+ */
+class QrModalErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
 
-  if (!activeQrOrder) return null;
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.warn('⚠️ [OrderQrModal local boundary caught error]:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in overflow-y-auto">
+          <div className="bg-[#111827] border border-gray-800 w-full max-w-md rounded-3xl p-6 shadow-2xl relative text-gray-100 text-center my-6">
+            <button
+              onClick={this.props.onClose}
+              className="absolute top-4 right-4 p-2 text-gray-400 hover:text-white rounded-xl hover:bg-gray-800 transition"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="w-14 h-14 rounded-2xl bg-orange-500/20 border border-orange-500/40 flex items-center justify-center text-orange-400 mx-auto mb-4">
+              <QrCode className="w-7 h-7" />
+            </div>
+
+            <h3 className="text-lg font-bold text-white mb-2">QR Unavailable</h3>
+            <p className="text-xs text-gray-400 mb-6 leading-relaxed max-w-xs mx-auto">
+              Unable to render this pickup pass at the moment. Please check your order details in Order History or try again.
+            </p>
+
+            <button
+              onClick={this.props.onClose}
+              className="w-full py-3 px-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-xs rounded-xl shadow-lg transition active:scale-98"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/**
+ * Inner QR Modal Content with defensive property access & safe normalization
+ */
+const OrderQrModalContent = ({ activeQrOrder, setActiveQrOrder }) => {
+  const [copied, setCopied] = useState(false);
 
   // `claimedAt` is also accepted because it is an irreversible server receipt.
   // This prevents an old cached status string from displaying a used pass active.
-  const isClaimed = String(activeQrOrder.orderStatus || activeQrOrder.order_status || '').toUpperCase() === 'CLAIMED' || Boolean(activeQrOrder.claimedAt || activeQrOrder.claimed_at);
+  const isClaimed = String(activeQrOrder?.orderStatus || activeQrOrder?.order_status || '').toUpperCase() === 'CLAIMED' || Boolean(activeQrOrder?.claimedAt || activeQrOrder?.claimed_at);
   
   // Use compact token for high-contrast, bold, instant barcode scanning (guaranteed string)
-  const qrPayload = String(activeQrOrder.token || activeQrOrder.id || '');
+  const rawPayload = activeQrOrder?.token || activeQrOrder?.id;
+  const qrPayload = rawPayload != null ? String(rawPayload).trim() : '';
 
   // Safely normalize items regardless of whether backend returns array, JSON string, or text
-  const safeItems = Array.isArray(activeQrOrder.items)
+  const safeItems = Array.isArray(activeQrOrder?.items)
     ? activeQrOrder.items
-    : (typeof activeQrOrder.items === 'string'
+    : (typeof activeQrOrder?.items === 'string'
         ? (() => {
             try {
               const parsed = JSON.parse(activeQrOrder.items);
@@ -35,11 +93,13 @@ export const OrderQrModal = () => {
               return [{ name: activeQrOrder.items, quantity: 1, price: 0 }];
             }
           })()
-        : (activeQrOrder.items && typeof activeQrOrder.items === 'object' ? [activeQrOrder.items] : []));
+        : (activeQrOrder?.items && typeof activeQrOrder?.items === 'object' ? [activeQrOrder.items] : []));
 
   const handleCopyOrderId = () => {
-    if (activeQrOrder.id) {
-      navigator.clipboard?.writeText(String(activeQrOrder.id));
+    if (activeQrOrder?.id) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(String(activeQrOrder.id)).catch(() => {});
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -69,14 +129,14 @@ export const OrderQrModal = () => {
           timeoutMs: 5000,
         });
         if (!stopped && data?.order) {
-          setActiveQrOrder(previous => previous?.id === data.order.id ? { ...previous, ...data.order } : previous);
+          setActiveQrOrder(previous => (previous?.id === data.order.id || previous?.token === data.order.token) ? { ...previous, ...data.order } : previous);
         }
       } catch (pollErr) {
-        console.warn('[OrderQrModal] Status refresh note:', pollErr);
+        // Silent catch: network or validation polling transient failures must never throw
       }
     };
     refreshClaimStatus();
-    const timer = window.setInterval(refreshClaimStatus, 1000);
+    const timer = window.setInterval(refreshClaimStatus, 2000);
     return () => {
       stopped = true;
       window.clearInterval(timer);
@@ -90,6 +150,7 @@ export const OrderQrModal = () => {
         <button
           onClick={() => setActiveQrOrder(null)}
           className="absolute top-4 right-4 p-2 text-gray-400 hover:text-white rounded-xl hover:bg-gray-800 transition"
+          aria-label="Close Pickup Pass"
         >
           <X className="w-5 h-5" />
         </button>
@@ -113,44 +174,53 @@ export const OrderQrModal = () => {
           </h2>
           <div className="flex items-center justify-center gap-2 mt-1">
             <span className="font-mono text-xs text-orange-400 font-bold">
-              Order ID: #{activeQrOrder.id || 'N/A'}
+              Order ID: #{activeQrOrder?.id || 'N/A'}
             </span>
-            <button
-              onClick={handleCopyOrderId}
-              className="text-gray-400 hover:text-white p-1 rounded transition"
-              title="Copy Order ID"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-orange-400" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
+            {activeQrOrder?.id && (
+              <button
+                onClick={handleCopyOrderId}
+                className="text-gray-400 hover:text-white p-1 rounded transition"
+                title="Copy Order ID"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-orange-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            )}
           </div>
         </div>
 
         {/* QR Code Container */}
         <div className="flex flex-col items-center justify-center my-3">
-          <div
-            className={`p-4 bg-white rounded-3xl shadow-2xl border-4 transition-all duration-300 relative ${
-              isClaimed ? 'opacity-40 grayscale border-gray-700' : 'border-orange-500/80 shadow-glow'
-            }`}
-          >
-            <QRCodeSVG
-              value={qrPayload}
-              size={200}
-              level="M"
-              includeMargin={true}
-            />
-            {isClaimed && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-2xl backdrop-blur-xs">
-                <span className="px-3 py-1 bg-rose-600 text-white text-xs font-black rounded-lg uppercase tracking-wider shadow">
-                  CLAIMED / EXPIRED
-                </span>
-              </div>
-            )}
-          </div>
+          {qrPayload ? (
+            <div
+              className={`p-4 bg-white rounded-3xl shadow-2xl border-4 transition-all duration-300 relative ${
+                isClaimed ? 'opacity-40 grayscale border-gray-700' : 'border-orange-500/80 shadow-glow'
+              }`}
+            >
+              <QRCodeSVG
+                value={qrPayload}
+                size={200}
+                level="M"
+                includeMargin={true}
+              />
+              {isClaimed && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 rounded-2xl backdrop-blur-xs">
+                  <span className="px-3 py-1 bg-rose-600 text-white text-xs font-black rounded-lg uppercase tracking-wider shadow">
+                    CLAIMED / EXPIRED
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="p-8 bg-gray-900/60 rounded-3xl border border-gray-800 text-center flex flex-col items-center justify-center w-[200px] h-[200px]">
+              <QrCode className="w-10 h-10 text-gray-600 mb-2" />
+              <p className="text-xs text-gray-400 font-medium">QR unavailable</p>
+            </div>
+          )}
 
           <p className="text-[11px] text-gray-400 mt-3 text-center max-w-xs leading-relaxed">
             {!isClaimed
               ? 'Present this digital QR code to the canteen counter vendor to collect your food.'
-              : `Handed over by ${activeQrOrder.claimedBy || activeQrOrder.claimed_by || 'canteen vendor'}${formatClaimedTime(activeQrOrder.claimedAt || activeQrOrder.claimed_at)}`}
+              : `Handed over by ${activeQrOrder?.claimedBy || activeQrOrder?.claimed_by || 'canteen vendor'}${formatClaimedTime(activeQrOrder?.claimedAt || activeQrOrder?.claimed_at)}`}
           </p>
         </div>
 
@@ -161,28 +231,32 @@ export const OrderQrModal = () => {
             <span className="text-gray-400">Campus Location:</span>
             <span className="font-bold text-white flex items-center gap-1.5">
               <Building className="w-3.5 h-3.5 text-orange-400" />
-              {activeQrOrder.block || 'CB'} Block
+              {activeQrOrder?.block || 'CB'} Block
             </span>
           </div>
 
           <div className="py-1 space-y-1">
             <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Snacks Included:</div>
-            {safeItems.map((item, idx) => {
-              const itemName = item?.name || (typeof item === 'string' ? item : 'Snack Item');
-              const itemQuantity = Number(item?.quantity) || 1;
-              const itemPrice = Number(item?.price) || 0;
-              return (
-                <div key={idx} className="flex justify-between items-center text-gray-200">
-                  <span>{itemQuantity}x {itemName}</span>
-                  <span className="font-semibold text-gray-400">₹{itemPrice * itemQuantity}</span>
-                </div>
-              );
-            })}
+            {safeItems.length > 0 ? (
+              safeItems.map((item, idx) => {
+                const itemName = item?.name || (typeof item === 'string' ? item : 'Snack Item');
+                const itemQuantity = Number(item?.quantity) || 1;
+                const itemPrice = Number(item?.price) || 0;
+                return (
+                  <div key={idx} className="flex justify-between items-center text-gray-200">
+                    <span>{itemQuantity}x {itemName}</span>
+                    <span className="font-semibold text-gray-400">₹{itemPrice * itemQuantity}</span>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-gray-400 italic">Snacks Order</div>
+            )}
           </div>
 
           <div className="pt-2 border-t border-gray-800 flex justify-between items-center">
-            <span className="text-gray-400">Total Paid ({activeQrOrder.paymentMethod || activeQrOrder.payment_method || 'UPI'}):</span>
-            <span className="text-sm font-black text-orange-400">₹{activeQrOrder.finalAmount ?? activeQrOrder.final_amount ?? activeQrOrder.totalAmount ?? 0}</span>
+            <span className="text-gray-400">Total Paid ({activeQrOrder?.paymentMethod || activeQrOrder?.payment_method || 'UPI'}):</span>
+            <span className="text-sm font-black text-orange-400">₹{activeQrOrder?.finalAmount ?? activeQrOrder?.final_amount ?? activeQrOrder?.totalAmount ?? 0}</span>
           </div>
 
         </div>
@@ -197,6 +271,20 @@ export const OrderQrModal = () => {
 
       </div>
     </div>
+  );
+};
+
+/**
+ * Exported OrderQrModal with self-contained ErrorBoundary
+ */
+export const OrderQrModal = () => {
+  const { activeQrOrder, setActiveQrOrder } = useApp();
+  if (!activeQrOrder) return null;
+
+  return (
+    <QrModalErrorBoundary onClose={() => setActiveQrOrder(null)}>
+      <OrderQrModalContent activeQrOrder={activeQrOrder} setActiveQrOrder={setActiveQrOrder} />
+    </QrModalErrorBoundary>
   );
 };
 
