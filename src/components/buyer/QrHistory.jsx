@@ -157,7 +157,7 @@ const QrHistoryContent = () => {
                     className="w-full mt-3 py-2.5 px-3 bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold text-xs rounded-xl transition flex items-center justify-center gap-1.5 active:scale-98"
                   >
                     <Eye className="w-3.5 h-3.5 text-orange-400" />
-                    <span>Open Pickup Modal</span>
+                    <span>{isClaimed ? 'View Expired Pass' : 'Open QR Pass'}</span>
                   </button>
                 </div>
               </div>

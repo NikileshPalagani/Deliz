@@ -127,10 +127,10 @@ export const OrderHistory = () => {
                 <div className="flex items-center justify-between text-[11px] text-gray-400 pt-2 border-t border-gray-800/80">
                   <div className="flex items-center gap-1.5">
                     <Building className="w-3 h-3 text-orange-400" />
-                    <span>{order.block} Block</span>
+                    <span>{order?.block || 'CB'} Block</span>
                   </div>
                   <div className="font-extrabold text-white text-sm">
-                    ₹{order.finalAmount}
+                    ₹{order?.finalAmount ?? order?.final_amount ?? order?.totalAmount ?? 0}
                   </div>
                 </div>
 
@@ -143,7 +143,7 @@ export const OrderHistory = () => {
                   }`}
                 >
                   <QrCode className="w-3.5 h-3.5" />
-                  <span>{isClaimed ? 'View Receipt Pass' : 'Open Pickup Model'}</span>
+                  <span>{isClaimed ? 'View Receipt Pass' : 'Open Pickup Pass'}</span>
                 </button>
               </div>
             );
